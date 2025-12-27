@@ -1,13 +1,12 @@
-from collections import OrderedDict
 from dataclasses import dataclass, field
 
 
 @dataclass(slots=True)
 class Constraints:
-    exact: list[tuple[int, str]] = field(default_factory=list)  # greens: (pos, char)
-    present: set[str] = field(default_factory=set)  # must exist somewhere (yellows)
-    absent_at: list[tuple[int, str]] = field(default_factory=list)  # yellow positions
-    absent: set[str] = field(default_factory=set)  # can't exist anywhere (greys)
+    exact: tuple[tuple[int, str], ...]  # greens: (pos, char) as tuple for speed
+    present: frozenset[str]  # must exist somewhere (yellows)
+    absent_at: tuple[tuple[int, str], ...]  # yellow positions as tuple for speed
+    absent: frozenset[str]  # can't exist anywhere (greys)
 
 
 def parse_response(guess: str, result: str) -> Constraints:
@@ -29,28 +28,30 @@ def parse_response(guess: str, result: str) -> Constraints:
         elif code == "N":
             if char not in confirmed_letters:
                 absent.add(char)
-            # else: duplicate letter marked grey - ignore (already confirmed elsewhere)
         else:
             raise ValueError(f"Unexpected code: {code}")
 
-    return Constraints(exact=exact, present=present, absent_at=absent_at, absent=absent)
+    return Constraints(
+        exact=tuple(exact),
+        present=frozenset(present),
+        absent_at=tuple(absent_at),
+        absent=frozenset(absent),
+    )
 
 
-def ismatch(word: str, constraints: Constraints) -> bool:
-    """Check if word satisfies all constraints."""
+def ismatch(word: str, word_chars: frozenset[str], constraints: Constraints) -> bool:
+    """Check if word satisfies all constraints using set operations."""
+    # Check absent first (most common rejection) - O(1) set intersection
+    if constraints.absent & word_chars:
+        return False
+
+    # Check present letters exist - O(1) subset check
+    if not constraints.present <= word_chars:
+        return False
+
     # Check greens: exact position matches
     for pos, char in constraints.exact:
         if word[pos] != char:
-            return False
-
-    # Check absent: letters that can't exist
-    for char in constraints.absent:
-        if char in word:
-            return False
-
-    # Check present: letters that must exist somewhere
-    for char in constraints.present:
-        if char not in word:
             return False
 
     # Check absent_at: yellows can't be at their guessed position
@@ -64,10 +65,12 @@ def ismatch(word: str, constraints: Constraints) -> bool:
 def filter_word_list(
     guess: str,
     result: str,
-    word_list: OrderedDict[str, float],
-) -> OrderedDict[str, float]:
+    word_list: dict[str, tuple[float, frozenset[str]]],
+) -> dict[str, tuple[float, frozenset[str]]]:
     """Filter word list based on guess and response."""
     constraints = parse_response(guess, result)
-    return OrderedDict(
-        (word, freq) for word, freq in word_list.items() if ismatch(word, constraints)
-    )
+    return {
+        word: data
+        for word, data in word_list.items()
+        if ismatch(word, data[1], constraints)
+    }
