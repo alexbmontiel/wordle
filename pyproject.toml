@@ -1,0 +1,16 @@
+[project]
+name = "wordle-helper"
+version = "0.1.0"
+description = "A CLI helper for solving Wordle puzzles"
+requires-python = ">=3.10"
+dependencies = [
+    "rich",
+    "typer",
+    "wordfreq",
+]
+
+[project.scripts]
+wordle = "wordle_helper.main:app"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
