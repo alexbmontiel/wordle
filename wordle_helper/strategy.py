@@ -1,10 +1,15 @@
 import math
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from functools import lru_cache
+from multiprocessing import cpu_count
 from tqdm import tqdm
 
 
+@lru_cache(maxsize=500000)
 def compute_result(guess: str, answer: str) -> str:
     """
     Compute the G/Y/N result string for a guess against an answer.
+    Cached for performance.
     """
     result = ["N"] * 5
     answer_chars: list[str | None] = list(answer)
@@ -174,30 +179,39 @@ def play_game(
 def evaluate_starting_word(
     starting_word: str,
     word_list: dict[str, tuple[float, frozenset[str]]],
+    answers: list[str] | None = None,
     max_guesses: int = 6,
     fail_penalty: float = 10.0,
+    show_progress: bool = True,
 ) -> dict:
     """
-    Evaluate a starting word by playing against all possible answers.
+    Evaluate a starting word by playing against a set of answers.
 
     Args:
         starting_word: The word to evaluate
-        word_list: All possible words (answers and guesses)
+        word_list: All possible words (used for guessing during game)
+        answers: List of answers to test against (defaults to all words in word_list)
         max_guesses: Maximum allowed guesses
         fail_penalty: Score to assign for failures (default 10)
+        show_progress: Whether to show progress bar
 
     Returns:
         Dict with statistics:
+        - starting_word: The evaluated word
         - average_score: Mean guesses (failures count as fail_penalty)
         - failure_rate: Fraction of games that failed
         - distribution: Dict mapping guess_count -> number of games
         - total_games: Number of games played
     """
+    if answers is None:
+        answers = list(word_list.keys())
+
     distribution: dict[int, int] = {}
     total_score = 0.0
     failures = 0
 
-    for answer in tqdm(word_list, desc=f"Evaluating {starting_word}"):
+    iterator = tqdm(answers, desc=f"Evaluating {starting_word}") if show_progress else answers
+    for answer in iterator:
         guesses = play_game(answer, word_list, starting_word, max_guesses)
 
         if guesses > max_guesses:
@@ -208,11 +222,112 @@ def evaluate_starting_word(
             total_score += guesses
             distribution[guesses] = distribution.get(guesses, 0) + 1
 
-    total_games = len(word_list)
+    total_games = len(answers)
     return {
         "starting_word": starting_word,
-        "average_score": total_score / total_games,
-        "failure_rate": failures / total_games,
+        "average_score": total_score / total_games if total_games > 0 else 0,
+        "failure_rate": failures / total_games if total_games > 0 else 0,
         "distribution": dict(sorted(distribution.items())),
         "total_games": total_games,
     }
+
+
+def rank_starting_words(
+    word_list: dict[str, tuple[float, frozenset[str]]],
+    candidates: list[str] | None = None,
+    answers: list[str] | None = None,
+    max_guesses: int = 6,
+    fail_penalty: float = 10.0,
+) -> list[dict]:
+    """
+    Rank starting words by expected number of guesses.
+
+    Args:
+        word_list: All possible words (used for guessing during game)
+        candidates: Starting words to evaluate (defaults to all words in word_list)
+        answers: List of answers to test against (defaults to all words in word_list)
+        max_guesses: Maximum allowed guesses
+        fail_penalty: Score to assign for failures
+
+    Returns:
+        List of result dicts sorted by average_score (ascending = better)
+    """
+    if candidates is None:
+        candidates = list(word_list.keys())
+
+    if answers is None:
+        answers = list(word_list.keys())
+
+    results = []
+    for starting_word in tqdm(candidates, desc="Ranking starting words"):
+        result = evaluate_starting_word(
+            starting_word=starting_word,
+            word_list=word_list,
+            answers=answers,
+            max_guesses=max_guesses,
+            fail_penalty=fail_penalty,
+            show_progress=False,
+        )
+        results.append(result)
+
+    # Sort by average_score (lower is better)
+    results.sort(key=lambda x: x["average_score"])
+    return results
+
+
+def _evaluate_worker(args: tuple) -> dict:
+    """Worker function for parallel evaluation."""
+    starting_word, word_list, answers, max_guesses, fail_penalty = args
+    return evaluate_starting_word(
+        starting_word, word_list, answers, max_guesses, fail_penalty, show_progress=False
+    )
+
+
+def rank_starting_words_parallel(
+    word_list: dict[str, tuple[float, frozenset[str]]],
+    candidates: list[str] | None = None,
+    answers: list[str] | None = None,
+    max_guesses: int = 6,
+    fail_penalty: float = 10.0,
+    n_workers: int | None = None,
+) -> list[dict]:
+    """
+    Rank starting words using parallel processing (optimal strategy).
+
+    Args:
+        word_list: All possible words (used for guessing during game)
+        candidates: Starting words to evaluate (defaults to all words in word_list)
+        answers: List of answers to test against (defaults to all words in word_list)
+        max_guesses: Maximum allowed guesses
+        fail_penalty: Score to assign for failures
+        n_workers: Number of parallel workers (defaults to CPU count)
+
+    Returns:
+        List of result dicts sorted by average_score (ascending = better)
+    """
+    if candidates is None:
+        candidates = list(word_list.keys())
+
+    if answers is None:
+        answers = list(word_list.keys())
+
+    if n_workers is None:
+        n_workers = cpu_count()
+
+    # Prepare arguments for workers
+    args_list = [
+        (starting_word, word_list, answers, max_guesses, fail_penalty)
+        for starting_word in candidates
+    ]
+
+    results = []
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        futures = {executor.submit(_evaluate_worker, args): args[0] for args in args_list}
+
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Ranking (parallel)"):
+            result = future.result()
+            results.append(result)
+
+    # Sort by average_score (lower is better)
+    results.sort(key=lambda x: x["average_score"])
+    return results
