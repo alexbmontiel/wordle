@@ -1,9 +1,13 @@
+"""Main CLI entry point for Wordle helper."""
+
 import typer
 from typing import Optional
 from pathlib import Path
 
-from .cli import live_game, simulated_game
-from .corpus import create_word_list, filter_words
+from wordle_helper.cli import live_game, simulated_game
+from wordle_helper.data import create_word_list, WordListConfig, FrequencyConfig
+from wordle_helper.scoring.strategies import InformationGainScorer
+from wordle_helper.game.player import Player
 
 app = typer.Typer()
 freq_app = typer.Typer(help="Frequency transformation commands")
@@ -14,16 +18,14 @@ app.add_typer(freq_app, name="freq")
 def main(ctx: typer.Context, n: int = typer.Option(10000, help="Limit word list to top N words")):
     """Wordle helper CLI. Run without arguments to play live."""
     if ctx.invoked_subcommand is None:
-        word_list = create_word_list()
-        word_list = filter_words(word_list, n)
+        word_list = create_word_list(WordListConfig(max_words=n))
         live_game(word_list)
 
 
 @app.command()
 def live(n: int = typer.Option(10000, help="Limit word list to top N words")):
     """Play an interactive game with the Wordle helper."""
-    word_list = create_word_list()
-    word_list = filter_words(word_list, n)
+    word_list = create_word_list(WordListConfig(max_words=n))
     live_game(word_list)
 
 
@@ -35,8 +37,7 @@ def simulate(
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress visual output"),
 ):
     """Simulate a game against a known answer."""
-    word_list = create_word_list()
-    word_list = filter_words(word_list, n)
+    word_list = create_word_list(WordListConfig(max_words=n))
     result = simulated_game(
         answer=answer,
         starting_word=starting_word,
@@ -56,12 +57,10 @@ def freq_plot(
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Save plot to file"),
 ):
     """Visualize frequency transformation with sigmoid curve."""
-    from .frequency import plot_frequency_transform
+    from wordle_helper.data.frequency import plot_frequency_transform
     import matplotlib.pyplot as plt
 
-    word_list = create_word_list()
-    word_list = filter_words(word_list, n)
-
+    word_list = create_word_list(WordListConfig(max_words=n))
     fig = plot_frequency_transform(word_list, k=k, x0=x0)
 
     if output:
@@ -79,11 +78,9 @@ def freq_cutoff(
     n_words: int = typer.Option(20, "--words", "-w", help="Number of words to show"),
 ):
     """Show words near the sigmoid cutoff point."""
-    from .frequency import find_cutoff_words
+    from wordle_helper.data.frequency import find_cutoff_words
 
-    word_list = create_word_list()
-    word_list = filter_words(word_list, n)
-
+    word_list = create_word_list(WordListConfig(max_words=n))
     cutoff_words = find_cutoff_words(word_list, k=k, x0=x0, n_words=n_words)
 
     typer.echo(f"\nWords near cutoff (k={k}, x0={x0}):\n")
@@ -102,11 +99,9 @@ def freq_optimize(
     quick: bool = typer.Option(True, "--quick/--full", help="Quick (2-phase) or full grid search"),
 ):
     """Optimize sigmoid parameters against an answer list."""
-    from .optimize import optimize_sigmoid_params, quick_optimize, load_answer_list
+    from wordle_helper.data.optimize import optimize_sigmoid_params, quick_optimize, load_answer_list
 
-    word_list = create_word_list()
-    word_list = filter_words(word_list, n)
-
+    word_list = create_word_list(WordListConfig(max_words=n))
     answer_words = load_answer_list(str(answers))
     typer.echo(f"Loaded {len(answer_words)} answer words from {answers}")
 

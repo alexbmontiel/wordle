@@ -1,10 +1,17 @@
+"""CLI interface for Wordle helper."""
+
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from .corpus import create_word_list
-from .filter import filter_word_list
-from .strategy import compute_result, best_guess, information_gain
+from wordle_helper.data import create_word_list, WordList, WordListConfig
+from wordle_helper.filtering.filter import filter_word_list
+from wordle_helper.core.result import compute_result
+from wordle_helper.game.player import Player
+from wordle_helper.game.state import GameState
+from wordle_helper.game.engine import play_turn, is_solved
+from wordle_helper.scoring.strategies import InformationGainScorer
+from wordle_helper.evaluation.simulator import simulate_game as sim_game, GameResult
 
 console = Console()
 MAX_GUESSES = 6
@@ -17,13 +24,8 @@ COLOR_KEY = {
 }
 
 
-def recommended_guess(word_list: dict[str, tuple[float, frozenset[str]]]):
-    if word_list:
-        return next(iter(word_list.keys()), None)
-    return None
-
-
 def format_result(guess, result):
+    """Format a guess result with colors."""
     text = Text()
     for g, c in zip(guess, result):
         color = COLOR_KEY.get(c, ("white",))[0]
@@ -31,22 +33,10 @@ def format_result(guess, result):
     return text
 
 
-def get_top_candidates(word_list: dict[str, tuple[float, frozenset[str]]], n: int = 5) -> list[tuple[str, float]]:
-    """Get top n candidates by information gain."""
-    if len(word_list) <= n:
-        candidates = list(word_list.keys())
-    else:
-        candidates = list(word_list.keys())[:50]  # Limit for speed
-
-    scored = [(w, information_gain(w, word_list)) for w in candidates]
-    scored.sort(key=lambda x: x[1], reverse=True)
-    return scored[:n]
-
-
 def simulated_game(
     answer: str,
     starting_word: str | None = None,
-    word_list: dict[str, tuple[float, frozenset[str]]] | None = None,
+    word_list: WordList | None = None,
     max_guesses: int = 6,
     verbose: bool = True,
 ) -> dict:
@@ -68,94 +58,67 @@ def simulated_game(
         - choices: List of top candidates considered each turn
     """
     if word_list is None:
-        word_list = create_word_list()
-
-    remaining = word_list.copy()
-    answer = answer.upper()
-    history = []
-    choices = []
-
+        word_list = create_word_list(WordListConfig(max_words=10000))
+    
+    # Create player with information gain scorer
+    scorer = InformationGainScorer()
+    player = Player(scorer=scorer)
+    
+    # Use the new simulator
+    result = sim_game(
+        answer=answer,
+        player=player,
+        word_list=word_list,
+        starting_word=starting_word,
+        max_guesses=max_guesses,
+    )
+    
     if verbose:
         console.print("\n[bold underline]=== Simulating Game ===[/bold underline]")
         console.print(f"Answer: [bold cyan]{answer}[/bold cyan]\n")
-
-    # Determine first guess
-    if starting_word:
-        guess = starting_word.upper()
-    else:
-        guess = best_guess(remaining)
-        if guess is None:
-            return {
-                "guesses": max_guesses + 1,
-                "success": False,
-                "history": [],
-                "choices": [],
-            }
-
-    for turn in range(1, max_guesses + 1):
-        result = compute_result(guess, answer)
-        history.append((guess, result))
-
-        # Get top candidates before filtering (for logging)
-        top = get_top_candidates(remaining, n=5)
-        choices.append({"turn": turn, "guess": guess, "top_candidates": top})
-
-        if verbose:
-            # Show turn info
-            console.print(f"[bold]Turn {turn}/{max_guesses}[/bold]")
-            console.print("  Guess: ", end="")
-            console.print(format_result(guess, result))
-            console.print(f"  Remaining words: {len(remaining)}")
-
-            # Show top candidates
-            if len(remaining) > 1:
-                console.print("  Top candidates:")
-                for word, score in top[:5]:
-                    marker = " [bold green]<< chosen[/bold green]" if word == guess else ""
-                    console.print(f"    {word}: {score:.3f} bits{marker}")
-            console.print()
-
-        if result == "GGGGG":
-            if verbose:
-                console.print(f"[bold green]Solved in {turn} guess{'es' if turn > 1 else ''}![/bold green]\n")
-            return {
-                "guesses": turn,
-                "success": True,
-                "history": history,
-                "choices": choices,
-            }
-
-        # Filter and pick next guess
-        remaining = filter_word_list(guess, result, remaining)
-
-        if not remaining:
-            if verbose:
-                console.print("[bold red]No valid words remaining![/bold red]\n")
-            return {
-                "guesses": max_guesses + 1,
-                "success": False,
-                "history": history,
-                "choices": choices,
-            }
-
-        next_guess = best_guess(remaining)
-        if next_guess is None:
-            break
-        guess = next_guess
-
-    # Failed
-    if verbose:
-        console.print(f"[bold red]Failed! Answer was {answer}[/bold red]\n")
-
+        
+        for choice in result.choices:
+            turn = choice["turn"]
+            guess = choice["guess"]
+            top_candidates = choice["top_candidates"]
+            remaining_count = choice["remaining_count"]
+            
+            # Find result for this guess
+            result_str = None
+            for g, r in result.history:
+                if g == guess:
+                    result_str = r
+                    break
+            
+            if result_str:
+                console.print(f"[bold]Turn {turn}/{max_guesses}[/bold]")
+                console.print("  Guess: ", end="")
+                console.print(format_result(guess, result_str))
+                console.print(f"  Remaining words: {remaining_count}")
+                
+                if len(top_candidates) > 1:
+                    console.print("  Top candidates:")
+                    for word, score in top_candidates[:5]:
+                        marker = " [bold green]<< chosen[/bold green]" if word == guess else ""
+                        console.print(f"    {word}: {score:.3f} bits{marker}")
+                console.print()
+        
+        if result.success:
+            console.print(f"[bold green]Solved in {result.guesses} guess{'es' if result.guesses > 1 else ''}![/bold green]\n")
+        else:
+            console.print(f"[bold red]Failed! Answer was {answer}[/bold red]\n")
+    
+    # Convert GameResult to dict for backward compatibility
     return {
-        "guesses": max_guesses + 1,
-        "success": False,
-        "history": history,
-        "choices": choices,
+        "guesses": result.guesses,
+        "success": result.success,
+        "history": result.history,
+        "choices": result.choices,
     }
 
 
 def display_history(history: list[tuple[str, str]]):
+    """Display guess history in a table."""
     if not history:
         return
     table = Table(title="History")
@@ -166,6 +129,7 @@ def display_history(history: list[tuple[str, str]]):
 
 
 def display_key():
+    """Display the color key."""
     console.print("\nColor key:")
     key_text = Text()
     for k, (color, desc) in COLOR_KEY.items():
@@ -174,46 +138,56 @@ def display_key():
     console.print()
 
 
-def live_game(
-    word_list: dict[str, tuple[float, frozenset[str]]] | None = None
-):
-    history = []
-    guess_num = 0
-
+def live_game(word_list: WordList | None = None, player: Player | None = None):
+    """
+    Play an interactive live game.
+    
+    Args:
+        word_list: Word list to use (if None, creates default)
+        player: Player with scoring strategy (if None, uses InformationGainScorer)
+    """
     if word_list is None:
-        word_list = create_word_list()
-
+        word_list = create_word_list(WordListConfig(max_words=10000))
+    
+    if player is None:
+        scorer = InformationGainScorer()
+        player = Player(scorer=scorer)
+    
+    state = GameState(remaining_words=word_list)
     console.print("\n[bold underline]=== Wordle Helper CLI ===[/bold underline]\n")
-    while guess_num < MAX_GUESSES:
-        rec = recommended_guess(word_list)
-        if rec:
-            console.print(f"Recommended guess: [bold]{rec}[/bold] ({len(word_list)} words remaining)")
+    
+    while state.turn < MAX_GUESSES:
+        # Analyze state and get recommendation
+        strategy_state = player.analyze_state(state, top_n=1)
+        if strategy_state.top_candidates:
+            rec = strategy_state.top_candidates[0][0]
+            console.print(f"Recommended guess: [bold]{rec}[/bold] ({strategy_state.remaining_count} words remaining)")
         else:
             console.print("[red]No valid words remaining![/red]")
             break
-
-        guess = console.input(f"Guess {guess_num + 1}/{MAX_GUESSES} (or 'q' to quit): ").upper()
+        
+        guess = console.input(f"Guess {state.turn + 1}/{MAX_GUESSES} (or 'q' to quit): ").upper()
         if guess.lower() == 'q':
             return
-
+        
         if len(guess) != 5 or not guess.isalpha():
             console.print("Please enter a valid 5-letter word.", style="red")
             continue
-
+        
         result = console.input("Enter result (G=green, Y=yellow, N=nothing): ").upper()
         if len(result) != 5 or any(c not in COLOR_KEY for c in result):
             console.print("Invalid result format. Example: GYNNY", style="red")
             continue
-
-        guess_num += 1
-        history.append((guess, result))
-        display_history(history)
-
-        if result == "GGGGG":
-            console.print(f"\n[bold green]Solved in {guess_num} guesses![/bold green]\n")
+        
+        # Update state
+        filtered_words = filter_word_list(guess, result, state.remaining_words)
+        state = play_turn(state, guess, result, filtered_words)
+        display_history(state.history)
+        
+        if is_solved(result):
+            console.print(f"\n[bold green]Solved in {state.turn} guesses![/bold green]\n")
             return
-
-        word_list = filter_word_list(guess, result, word_list)
+        
         display_key()
-
+    
     console.print("\n[bold red]Game over! Out of guesses.[/bold red]\n")

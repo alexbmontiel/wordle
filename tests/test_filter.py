@@ -1,4 +1,5 @@
-from wordle_helper.filter import Constraints, filter_word_list, ismatch, parse_response
+from wordle_helper.core.constraints import Constraints, parse_response
+from wordle_helper.filtering.filter import filter_word_list, ismatch
 
 
 class TestParseResponse:

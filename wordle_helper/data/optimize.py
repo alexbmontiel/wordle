@@ -10,7 +10,7 @@ from scipy.optimize import minimize, differential_evolution
 from typing import Callable
 from tqdm import tqdm
 
-from wordle_helper.frequency import transform_word_list
+from wordle_helper.data.frequency import transform_word_list
 from wordle_helper.fast_strategy import FastEvaluator, build_result_matrix
 
 
