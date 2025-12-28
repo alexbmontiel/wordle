@@ -122,7 +122,7 @@ def freq_optimize(
         )
 
     typer.echo(f"\n{'='*40}")
-    typer.echo(f"Optimization Results:")
+    typer.echo("Optimization Results:")
     typer.echo(f"{'='*40}")
     typer.echo(f"Best k (steepness): {result['best_k']:.2f}")
     typer.echo(f"Best x0 (midpoint): {result['best_x0']:.3f}")
