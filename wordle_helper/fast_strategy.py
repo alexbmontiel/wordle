@@ -3,7 +3,7 @@ Fast strategy evaluation using pre-computed result matrices.
 Optimized for evaluating many starting words.
 """
 import numpy as np
-from numba import njit
+from numba import njit, prange
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import cpu_count, Pool
@@ -53,6 +53,69 @@ def _find_best_guess(result_submatrix: np.ndarray, freqs: np.ndarray, total_freq
             best_idx = i
 
     return best_idx
+
+
+@njit(cache=True)
+def _compute_result_numba(guess_arr: np.ndarray, answer_arr: np.ndarray) -> int:
+    """Numba-optimized result computation for single guess/answer pair."""
+    guess_results = np.full(5, 2, dtype=np.int8)  # 2 = N, 1 = Y, 0 = G
+    answer_used = np.zeros(5, dtype=np.bool_)
+
+    # First pass: greens
+    for i in range(5):
+        if guess_arr[i] == answer_arr[i]:
+            guess_results[i] = 0  # G
+            answer_used[i] = True
+
+    # Second pass: yellows
+    for i in range(5):
+        if guess_results[i] == 0:
+            continue
+        for j in range(5):
+            if not answer_used[j] and guess_arr[i] == answer_arr[j]:
+                guess_results[i] = 1  # Y
+                answer_used[j] = True
+                break
+
+    # Encode as integer
+    result = 0
+    multiplier = 1
+    for i in range(5):
+        result += guess_results[i] * multiplier
+        multiplier *= 3
+
+    return result
+
+
+@njit(cache=True, parallel=True)
+def _compute_row_numba(guess_arr: np.ndarray, all_answers: np.ndarray) -> np.ndarray:
+    """Compute results for one guess against all answers (numba parallel)."""
+    n = all_answers.shape[0]
+    row = np.zeros(n, dtype=np.uint8)
+    for j in prange(n):
+        row[j] = _compute_result_numba(guess_arr, all_answers[j])
+    return row
+
+
+@njit(cache=True, parallel=True)
+def _compute_full_matrix_numba(all_words: np.ndarray) -> np.ndarray:
+    """Compute full result matrix using numba with parallelization."""
+    n = all_words.shape[0]
+    matrix = np.zeros((n, n), dtype=np.uint8)
+    for i in prange(n):
+        for j in range(n):
+            matrix[i, j] = _compute_result_numba(all_words[i], all_words[j])
+    return matrix
+
+
+def words_to_array(words: list[str]) -> np.ndarray:
+    """Convert list of words to numpy array of ordinals for numba."""
+    n = len(words)
+    arr = np.zeros((n, 5), dtype=np.int32)
+    for i, word in enumerate(words):
+        for j, c in enumerate(word):
+            arr[i, j] = ord(c)
+    return arr
 
 
 def compute_result_fast(guess: str, answer: str) -> int:
@@ -190,20 +253,43 @@ def _evaluate_starting_worker(starting_idx: int) -> dict:
     }
 
 
-def build_result_matrix(words: list[str], show_progress: bool = True, n_workers: int | None = None) -> np.ndarray:
+def build_result_matrix(words: list[str], show_progress: bool = True, n_workers: int | None = None, use_numba: bool = True) -> np.ndarray:
     """
-    Pre-compute all guess/answer result pairs in parallel.
+    Pre-compute all guess/answer result pairs.
 
     Returns: numpy array of shape (n_words, n_words) with dtype uint8
     Each entry is the result code (0-242) for result_matrix[guess_idx, answer_idx]
+
+    Args:
+        words: List of words
+        show_progress: Show progress bar
+        n_workers: Number of workers (ignored when use_numba=True)
+        use_numba: Use numba-optimized parallel computation (much faster)
     """
     n = len(words)
+
+    if use_numba:
+        # Convert words to numpy array for numba
+        if show_progress:
+            print(f"Converting {n} words to array...")
+        words_arr = words_to_array(words)
+
+        if show_progress:
+            print("Computing result matrix with numba (parallel)...")
+
+        # First call compiles, subsequent calls are fast
+        matrix = _compute_full_matrix_numba(words_arr)
+
+        if show_progress:
+            print("Done!")
+        return matrix
+
+    # Fallback to ProcessPoolExecutor
     matrix = np.zeros((n, n), dtype=np.uint8)
 
     if n_workers is None:
         n_workers = cpu_count()
 
-    # Prepare arguments for each row
     args_list = [(words[i], words) for i in range(n)]
 
     with ProcessPoolExecutor(max_workers=n_workers) as executor:
@@ -226,6 +312,7 @@ class FastEvaluator:
         self,
         word_list: dict[str, tuple[float, frozenset[str]]],
         answer_indices: list[int] | None = None,
+        result_matrix: np.ndarray | None = None,
     ):
         """
         Initialize with word list.
@@ -233,14 +320,18 @@ class FastEvaluator:
         Args:
             word_list: Dict mapping word -> (frequency, char_set)
             answer_indices: Indices of words to use as answers (default: all)
+            result_matrix: Pre-computed result matrix (optional, builds if not provided)
         """
         self.words = list(word_list.keys())
         self.word_to_idx = {w: i for i, w in enumerate(self.words)}
         self.frequencies = np.array([word_list[w][0] for w in self.words])
         self.n_words = len(self.words)
 
-        # Build result matrix
-        self.result_matrix = build_result_matrix(self.words)
+        # Build or use provided result matrix
+        if result_matrix is not None:
+            self.result_matrix = result_matrix
+        else:
+            self.result_matrix = build_result_matrix(self.words)
 
         # Answer set
         if answer_indices is None:
