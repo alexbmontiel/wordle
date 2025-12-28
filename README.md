@@ -103,15 +103,34 @@ Turn 3/6
 Solved in 3 guesses!
 ```
 
+### Frequency Transformation Commands
+
+The helper includes tools for analyzing and optimizing frequency transformations:
+
+```bash
+# Visualize frequency transformation with sigmoid curve
+wordle freq plot --k 10.0 --x0 0.5
+
+# Show words near the sigmoid cutoff point
+wordle freq cutoff --k 10.0 --x0 0.5 --words 20
+
+# Optimize sigmoid parameters against an answer list
+wordle freq optimize wordle_answers.txt --quick
+```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for details on frequency transformations.
+
 ## Strategy
 
-The bot uses **frequency-weighted entropy** to select optimal guesses:
+The bot uses **frequency-weighted information gain (entropy)** to select optimal guesses:
 
 1. **Partitioning**: For each candidate guess, partition remaining words by what result they'd produce (243 possible outcomes: G/Y/N for each position)
-2. **Information gain**: Calculate expected bits of information gained, weighted by word frequency (common words matter more)
+2. **Information gain**: Calculate expected bits of information gained (Shannon entropy), weighted by word frequency (common words matter more)
 3. **Selection**: Choose the guess that maximizes expected information gain
 
 This approach prioritizes eliminating common words (likely Wordle answers) over obscure ones.
+
+For more details on how the strategy works, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Development
 
@@ -127,21 +146,33 @@ Run tests:
 pytest
 ```
 
+## Architecture
+
+For detailed documentation on how the codebase works, see [ARCHITECTURE.md](ARCHITECTURE.md). This includes:
+- Module structure and data flow
+- Explanation of the result matrix optimization
+- How scoring strategies work
+- Usage examples
+
 ## Python API
 
 ```python
-from wordle_helper import corpus
+from wordle_helper.data import create_word_list, WordListConfig
 from wordle_helper.cli import simulated_game
-from wordle_helper.strategy import information_gain, evaluate_starting_word
+from wordle_helper.evaluation.benchmark import evaluate_strategy
+from wordle_helper.scoring.strategies import InformationGainScorer
 
 # Create word list
-word_list = corpus.create_word_list()
+word_list = create_word_list(WordListConfig(max_words=10000))
 
-# Simulate a game
-result = simulated_game("CRANE", starting_word="SLATE", verbose=False)
+# Simulate a game (simulated_game creates player internally)
+result = simulated_game("CRANE", starting_word="SLATE", word_list=word_list, verbose=False)
 print(f"Solved in {result['guesses']} guesses")
 
 # Evaluate a starting word across all answers
-stats = evaluate_starting_word("SLATE", word_list)
-print(f"Average: {stats['average_score']:.2f}, Failures: {stats['failure_rate']:.1%}")
+scorer = InformationGainScorer()
+stats = evaluate_strategy(scorer, word_list, starting_word="SLATE")
+print(f"Average: {stats.average_score:.2f}, Failures: {stats.failure_rate:.1%}")
 ```
+
+For more details, see [ARCHITECTURE.md](ARCHITECTURE.md).

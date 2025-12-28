@@ -1,6 +1,10 @@
+"""Corpus loading and word list creation utilities."""
+
 from itertools import islice
 
 from wordfreq import get_frequency_dict
+
+from wordle_helper.data.word_list import WordList
 
 
 def is_simple_plural_or_verb(word: str, word_freq: float, all_words: dict[str, float]) -> bool:
@@ -26,10 +30,11 @@ def is_simple_plural_or_verb(word: str, word_freq: float, all_words: dict[str, f
     return False
 
 
-def create_word_list() -> dict[str, tuple[float, frozenset[str]]]:
-    """Create word list with pre-computed character sets for fast filtering.
-
-    Returns dict mapping word -> (frequency, character_set)
+def load_raw_word_list() -> dict[str, float]:
+    """
+    Load raw word list with frequencies (no transforms, no character sets).
+    
+    Returns dict mapping word -> frequency.
     Filters out simple plurals/verb forms (S/ES endings where base form exists).
     """
     all_words = get_frequency_dict('en', "best")
@@ -39,12 +44,23 @@ def create_word_list() -> dict[str, tuple[float, frozenset[str]]]:
         if len(w) == 5 and w.isalpha():
             word = w.upper()
             if not is_simple_plural_or_verb(word, freq, all_words):
-                five_letter_words[word] = (freq, frozenset(word))
+                five_letter_words[word] = freq
 
     # Sort by frequency descending
-    five_letter_words = dict(sorted(five_letter_words.items(), key=lambda x: x[1][0], reverse=True))
+    five_letter_words = dict(sorted(five_letter_words.items(), key=lambda x: x[1], reverse=True))
 
     return five_letter_words
 
-def filter_words(word_list: dict, n: int) -> dict[str, tuple[float, frozenset[str]]]:
+
+def filter_words(word_list: WordList, n: int) -> WordList:
+    """
+    Filter word list to top N words by frequency.
+    
+    Args:
+        word_list: Word list to filter
+        n: Number of words to keep (top N by frequency)
+        
+    Returns:
+        Filtered word list
+    """
     return dict(islice(word_list.items(), n))

@@ -1,4 +1,4 @@
-from wordle_helper.strategy import compute_result
+from wordle_helper.core.result import compute_result
 
 
 class TestComputeResult:
